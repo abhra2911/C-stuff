@@ -1,0 +1,232 @@
+#include <iostream>
+#include <vector>
+#include <unordered_set>
+#include <unordered_map>
+#include <queue>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <climits>
+
+using namespace std;
+
+#define HUB_DEGREE_THRESHOLD 15
+
+void createAdjList(vector<vector<int>>& adj, const string& filename) {
+    ifstream file(filename);
+
+    if (!file.is_open()) {
+        cout << "Error opening file: " << filename << endl;
+        return;
+    }
+
+    string line;
+    getline(file, line); // Skip header
+
+    int src, dest;
+
+    while (getline(file, line)) {
+        stringstream ss(line);
+        string srcString, destString;
+
+        getline(ss, srcString, ',');
+        getline(ss, destString);
+
+        src = stoi(srcString);
+        dest = stoi(destString);
+
+        int largest = max(src, dest);
+
+        if (adj.size() <= static_cast<size_t>(largest)) {
+            adj.resize(largest + 1);
+        }
+
+        adj[src].push_back(dest);
+        adj[dest].push_back(src);
+    }
+
+    file.close();
+}
+
+unordered_set<int> hubFinder(vector<vector<int>>& adj) {
+    unordered_set<int> hubList;
+
+    for (int i = 0; i < (int)adj.size(); i++) {
+        if ((int)adj[i].size() > HUB_DEGREE_THRESHOLD) {
+            hubList.insert(i);
+        }
+    }
+
+    return hubList;
+}
+
+void precomputeHubData(
+    const vector<vector<int>>& adj,
+    const unordered_set<int>& hubs,
+    unordered_map<int, unordered_map<int, int>>& hubDist,
+    unordered_map<int, unordered_map<int, int>>& hubParent
+) {
+    for (int hub : hubs) {
+        unordered_map<int, int>& dist = hubDist[hub];
+        unordered_map<int, int>& parent = hubParent[hub];
+
+        queue<int> q;
+        dist[hub] = 0;
+        parent[hub] = -1;
+        q.push(hub);
+
+        while (!q.empty()) {
+            int curr = q.front();
+            q.pop();
+
+            for (int neighbor : adj[curr]) {
+                if (!dist.count(neighbor)) {
+                    dist[neighbor] = dist[curr] + 1;
+                    parent[neighbor] = curr;
+                    q.push(neighbor);
+                }
+            }
+        }
+    }
+}
+
+vector<int> reconstructPath(
+    const unordered_map<int, int>& parent,
+    int from,
+    int to
+) {
+    if (!parent.count(to)) {
+        return {};
+    }
+
+    vector<int> path;
+
+    for (int at = to; at != -1; at = parent.at(at)) {
+        path.push_back(at);
+    }
+
+    reverse(path.begin(), path.end());
+
+    if (path.empty() || path[0] != from) {
+        return {};
+    }
+
+    return path;
+}
+
+vector<int> queryShortestPathViaHub(
+    const unordered_map<int, unordered_map<int, int>>& hubDist,
+    const unordered_map<int, unordered_map<int, int>>& hubParent,
+    const unordered_set<int>& hubs,
+    int src,
+    int dest
+) {
+    int bestDist = INT_MAX;
+    int bestHub = -1;
+
+    for (int h : hubs) {
+        const auto& d = hubDist.at(h);
+
+        if (d.count(src) && d.count(dest)) {
+            int total = d.at(src) + d.at(dest);
+
+            if (total < bestDist) {
+                bestDist = total;
+                bestHub = h;
+            }
+        }
+    }
+
+    if (bestHub == -1) {
+        return {};
+    }
+
+    vector<int> srcToHub = reconstructPath(hubParent.at(bestHub), bestHub, src);
+    reverse(srcToHub.begin(), srcToHub.end());
+
+    vector<int> hubToDest = reconstructPath(hubParent.at(bestHub), bestHub, dest);
+
+    if (srcToHub.empty() || hubToDest.empty()) {
+        return {};
+    }
+
+    if (hubToDest.size() > 1) {
+        srcToHub.insert(srcToHub.end(), hubToDest.begin() + 1, hubToDest.end());
+    }
+
+    return srcToHub;
+}
+
+bool isReachable(
+    const unordered_map<int, unordered_map<int, int>>& hubDist,
+    const unordered_set<int>& hubs,
+    int u,
+    int v
+) {
+    for (int h : hubs) {
+        const auto& d = hubDist.at(h);
+
+        if (d.count(u) && d.count(v)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        cout << "Usage: " << argv[0] << " <csv_filename>" << endl;
+        return 1;
+    }
+
+    string filename = argv[1];
+
+    vector<vector<int>> adj;
+    createAdjList(adj, filename);
+
+    if (adj.empty()) {
+        cout << "Graph is empty or file could not be read." << endl;
+        return 1;
+    }
+
+    unordered_set<int> hubs = hubFinder(adj);
+    cout << "Hubs found: " << hubs.size() << endl;
+
+    cout << "Precomputing hub distances..." << endl;
+    unordered_map<int, unordered_map<int, int>> hubDist, hubParent;
+    precomputeHubData(adj, hubs, hubDist, hubParent);
+    cout << "Done." << endl;
+
+    int src, dest;
+    cout << "Enter 2 nodes to find path: ";
+    cin >> src >> dest;
+
+    if (!isReachable(hubDist, hubs, src, dest)) {
+        cout << "Nodes " << src << " and " << dest
+             << " are not reachable via any hub." << endl;
+        return 0;
+    }
+
+    vector<int> path = queryShortestPathViaHub(
+        hubDist,
+        hubParent,
+        hubs,
+        src,
+        dest
+    );
+
+    if (!path.empty()) {
+        cout << "Path (" << path.size() - 1 << " hops): ";
+
+        for (int node : path) {
+            cout << node << " ";
+        }
+
+        cout << endl;
+    } else {
+        cout << "No path found from " << src << " to " << dest << endl;
+    }
+
+    return 0;
+}
